@@ -1,0 +1,5 @@
+transformers>=4.53 
+datasets 
+trl 
+peft 
+accelerate
