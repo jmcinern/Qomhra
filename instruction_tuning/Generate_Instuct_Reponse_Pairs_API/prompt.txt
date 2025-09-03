@@ -1,0 +1,15 @@
+TASK DESCRIPTION
+YOUR JOB:
+Generate ONE instruction–response pair in Irish Gaelic
+ALLOWED QUESTION TYPES
+Is it true that ...
+Explain ...
+Describe ...
+List the steps ...
+REQUIREMENTS
+The prompt and response must be accurate and entirely in Irish.
+The prompt must resemble a user-chatbot interaction in structure, theme and length.  
+Output only the instruction–response pair.
+OUTPUT FORMAT
+Instruction: <instruction in Irish>
+Response: <response in Irish>

@@ -1,0 +1,7 @@
+choix
+numpy
+pandas
+huggingface_hub
+scikit-learn
+matplotlib
+seaborn
