@@ -1,20 +1,22 @@
 # Joseph McInerney MSc AI Project
 
 ## Part 1: Pretraining
-- Preprocessing: containment.py, 
+- Preprocessing: containment, CNG, , UCCIX, Bitext 
 - Training Script
-    - Dependencies: Requirements.txt
-    - Bash Script: run_cpt.sh
-    - Continued Pre-training Script: cpt.py
-    - Distributed Training: deepspeed_config.json
+    - Dependencies
+    - Bash Script
+    - Continued Pre-training Script
+    - Distributed Training Config
 
 ## Part 2: Instruction Tuning
-- API Calls to Generate LLM Instruct-Response pairs: generate_LLM_instruct.py
-- App for Human Annotation: human_annotation.py
-- LLM Automated Annotation: LLM Annotation
-- Ranking and Inter-Annotator Analysis: annotation_analysis.py
-- Dataset preparationg for Google Vertext AI Translation of Dolly V2: dolly_gemini_trans  
-- Statistical Analysis of Open-Ended Response Lengths: response_length_comparison.py
+- API Calls to Generate LLM Instruct-Response pairs
+- App for Human Annotation
+- LLM Automated Annotation
+- Ranking and Inter-Annotator Analysis
+    - Bradley Terry Ranking and Cohen's Kappa Script
+    - Dependencies
+- Dataset preparationg for Google Vertext AI Translation of Dolly V2  
+- Statistical Analysis of Open-Ended Response Lengths
 - Dataset: HF_REPO
 
 ## Part 2: Human Feedback Daat
