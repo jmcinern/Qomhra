@@ -15,11 +15,14 @@
 - Ranking and Inter-Annotator Analysis
     - Bradley Terry Ranking and Cohen's Kappa Script
     - Dependencies
-- Dataset preparationg for Google Vertext AI Translation of Dolly V2  
+- Dataset preparationg for Google Vertext AI Translation of Dolly V2
+- LoRA
+    - Training script
+    - Dependencies
 - Statistical Analysis of Open-Ended Response Lengths
-- Dataset: HF_REPO
+- Dataset: [HF_REPO](https://huggingface.co/datasets/jmcinern/Instruction_Ga_En_for_LoRA)
 
 ## Part 2: Human Feedback Daat
 - LIMA Translation and Preference Dataset Creation: create_hf_LIMA_ga.py
 - App for Native Annotation: annotate_preferences.py
-- Dataset: HF_REPO
+- Dataset: [HF_REPO](https://huggingface.co/datasets/jmcinern/LIMA_ga/)
