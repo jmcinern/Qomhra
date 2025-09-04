@@ -22,7 +22,7 @@
 - Statistical Analysis of Open-Ended Response Lengths
 - Dataset: [HF_REPO](https://huggingface.co/datasets/jmcinern/Instruction_Ga_En_for_LoRA)
 
-## Part 2: Human Feedback Daat
-- LIMA Translation and Preference Dataset Creation: create_hf_LIMA_ga.py
-- App for Native Annotation: annotate_preferences.py
+## Part 2: Human Feedback Data
+- LIMA Translation and Preference Dataset Creation
+- App for Native Annotation
 - Dataset: [HF_REPO](https://huggingface.co/datasets/jmcinern/LIMA_ga/)
