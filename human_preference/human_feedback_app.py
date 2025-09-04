@@ -1,304 +1,301 @@
-# ab_app_k4_final.py
-# Gradio A/B annotation app
-# - Single combined criterion (grammar + semantics)
-# - Two sources (Wikipedia, Oireachtas) only
-# - Deterministic sampling: EXACTLY K=4 comparisons per model pair per source
-# - Deterministic A/B assignment with 2/2 split per pair
-# - Single output file: annotations.csv
-# - No wrap-around after last item: annotators see "Done" and stop
-
 import gradio as gr
 import pandas as pd
-import time
-from itertools import combinations
-from pathlib import Path
 import json
-import hashlib
+import random
+from datetime import datetime
+from pathlib import Path
+import os
 
-PAIRS_CSV = "./outputs/pairs.csv"  # columns: run_id, model, source_type, instruction, response, text
+from huggingface_hub import HfApi, hf_hub_download, create_repo
+try:
+    from huggingface_hub.utils import HfHubHTTPError
+except ImportError:
+    # For older versions of huggingface_hub
+    class HfHubHTTPError(Exception):
+        pass
+
+# --- Configuration ---
+# Source data file containing instructions and responses
+TRANSLATED_FILE = "translated_IRT_ga.jsonl"
+# Local and remote filename for annotations
+ANNOTATION_FILE = "DPO_annotations.csv"
+# Hugging Face Hub details
+HF_REPO_ID = "jmcinern/DPO_ga" # Your HF repo ID
+
+HF_TOKEN = os.getenv("HF_TOKEN")
+
+# Deterministic sampling settings
+NUM_SAMPLES = 100
+RANDOM_SEED = 42
+
+# --- UI Content ---
+CONSENT_MD = """
+### Irish QA Pair Comparison (Master’s Thesis)
+
+You are invited to take part in a study on Large Language Model Irish-language QA quality.
+By continuing, you consent to the following:
+
+- Your annotations are anonymised.
+- The dataset (reference text + model outputs + your choices) will be released **open-source** for both research and commercial purposes.
+- No personal data is collected. You may stop at any time.
+
+- You will answer the following question:
+
+#### Which answer, A or B, is better in terms of grammar, naturalness, and coherence?
+
+- Only base your decision on this question and not other factors.
+
+Please confirm consent, select your role, then press **Begin**.
+"""
+
+# --- Helper Functions ---
+def load_master_samples() -> list:
+    """Loads, shuffles deterministically, and returns the first 100 samples."""
+    if not Path(TRANSLATED_FILE).exists():
+        raise FileNotFoundError(f"Source file not found: {TRANSLATED_FILE}")
+    with open(TRANSLATED_FILE, "r", encoding="utf-8") as f:
+        data = [json.loads(line) for line in f]
+
+    # Shuffle with a fixed seed to get a deterministic "random" subset
+    rng = random.Random(RANDOM_SEED)
+    rng.shuffle(data)
+    return data[:NUM_SAMPLES]
+
+def download_annotations() -> pd.DataFrame:
+    """Downloads annotations from HF. If not found, returns an empty DataFrame."""
+    try:
+        local_path = hf_hub_download(
+            repo_id=HF_REPO_ID,
+            filename=ANNOTATION_FILE,
+            repo_type="dataset",
+            token=HF_TOKEN,
+        )
+        print(f"Downloaded existing annotations from {HF_REPO_ID}")
+        return pd.read_csv(local_path)
+    except HfHubHTTPError as e:
+        # If the file doesn't exist on the Hub (404), it's the first run.
+        if e.response.status_code == 404:
+            print("No remote annotation file found. Creating a new one.")
+            # Define the schema for the new CSV file, now including annotator_type
+            return pd.DataFrame(columns=["hash", "annotator_type", "choice", "preferred_response", "timestamp"])
+        else:
+            raise  # Re-raise other HTTP errors
+
+def upload_annotations(df: pd.DataFrame):
+    """Saves a DataFrame locally and pushes it to the Hugging Face Hub."""
+    if not HF_TOKEN:
+        print("WARNING: No HF_TOKEN found. Skipping upload.")
+        return
+
+    # Save locally first
+    df.to_csv(ANNOTATION_FILE, index=False)
+
+    # Upload to Hub
+    api = HfApi()
+    create_repo(HF_REPO_ID, repo_type="dataset", exist_ok=True, token=HF_TOKEN)
+    api.upload_file(
+        path_or_fileobj=ANNOTATION_FILE,
+        path_in_repo=ANNOTATION_FILE,
+        repo_id=HF_REPO_ID,
+        repo_type="dataset",
+        token=HF_TOKEN,
+        commit_message="Append new DPO annotation"
+    )
+    print(f"Successfully uploaded updated annotations to {HF_REPO_ID}")
 
 
-def load_secrets(path="./secrets.json"):
-    with open(path, "r", encoding="utf-8") as f:
-        # your file is a list with one dict
-        return json.load(f)[0]
+# --- Gradio Core Logic ---
 
+def prepare_tasks():
+    """
+    Loads master samples, downloads existing annotations, and prepares the
+    list of un-annotated tasks for the current session.
+    """
+    master_samples = load_master_samples()
+    annotations_df = download_annotations()
+    completed_hashes = set(annotations_df['hash'].unique())
 
-secrets = load_secrets()
-open_ai_key = secrets.get("open_ai")
+    to_do_samples = [s for s in master_samples if s['hash'] not in completed_hashes]
 
-# Exactly 4 comparisons per model pair per source
-K = 4
-OUT_FILE = "./annotations.csv"
-SCHEMA = [
-    "annotator_id",
-    "source_type",
-    "text",
-    "model_A",
-    "model_B",
-    "choice",
-    "instruction_A",
-    "response_A",
-    "instruction_B",
-    "response_B",
-    "timestamp",
-]
-if not Path(OUT_FILE).exists():
-    pd.DataFrame(columns=SCHEMA).to_csv(OUT_FILE, index=False)
+    tasks = []
+    for sample in to_do_samples:
+        # Shuffle response1 and response2 for unbiased presentation
+        options = [('response1', sample['response1']), ('response2', sample['response2'])]
+        random.shuffle(options)
 
-pairs_all = pd.read_csv(PAIRS_CSV)
+        tasks.append({
+            "hash": sample['hash'],
+            "instruction": sample['instruction'],
+            "response_A": options[0][1],
+            "response_B": options[1][1],
+            # Track which original response corresponds to A and B
+            "shuffle_map": {'A': options[0][0], 'B': options[1][0]}
+        })
+    return tasks
 
+def start_session(annotator_type):
+    """
+    Triggered by the 'Begin' button. Prepares tasks and loads the first one.
+    """
+    tasks = prepare_tasks()
+    if not tasks:
+        # All samples are already annotated
+        return {
+            consent_group: gr.update(visible=False),
+            task_group: gr.update(visible=False),
+            done_group: gr.update(visible=True),
+            state_tasks: [],
+            state_task_index: 0,
+            state_annotator_type: ""
+        }
 
-def _shared_texts(df, m1, m2):
-    t1 = set(df[df["model"] == m1]["text"])
-    t2 = set(df[df["model"] == m2]["text"])
-    return list(t1 & t2)
+    first_task = tasks[0]
+    progress_str = f"Progress: 1 / {len(tasks)}"
 
-
-def _stable_hash(s: str) -> int:
-    return int(hashlib.sha256(s.encode("utf-8")).hexdigest(), 16)
-
-
-def build_comparisons_k(source_type: str, k: int):
-    df = pairs_all[pairs_all["source_type"] == source_type].copy()
-    if df.empty:
-        return []
-
-    models = sorted(df["model"].unique().tolist())
-    comps = []
-
-    # For each unordered pair, deterministically pick k texts and fix A/B sides
-    for m1, m2 in combinations(models, 2):
-        shared = _shared_texts(df, m1, m2)
-        if not shared:
-            continue
-        # Sort shared texts by stable hash of (source|m1|m2|text)
-        keyed = []
-        for t in shared:
-            h = _stable_hash(f"{source_type}|{m1}|{m2}|{t}")
-            keyed.append((h, t))
-        keyed.sort(key=lambda x: x[0])
-        ordered_texts = [t for _, t in keyed]
-
-        # Take first k (cycle deterministically if fewer than k)
-        chosen = []
-        idx = 0
-        while len(chosen) < k:
-            chosen.append(ordered_texts[idx % len(ordered_texts)])
-            idx += 1
-
-        # Build comparisons with deterministic A/B: even index -> A=m1, odd index -> A=m2
-        for j, t in enumerate(chosen):
-            r1 = df[(df["model"] == m1) & (df["text"] == t)].iloc[0]
-            r2 = df[(df["model"] == m2) & (df["text"] == t)].iloc[0]
-            if j % 2 == 0:
-                A, B = (m1, r1), (m2, r2)
-            else:
-                A, B = (m2, r2), (m1, r1)
-            comps.append(
-                {
-                    "source_type": source_type,
-                    "text": t,
-                    "model_A": A[0],
-                    "instruction_A": A[1]["instruction"],
-                    "response_A": A[1]["response"],
-                    "model_B": B[0],
-                    "instruction_B": B[1]["instruction"],
-                    "response_B": B[1]["response"],
-                }
-            )
-
-    # Deterministic overall ordering: by (source_type, model_A, model_B, text)
-    comps.sort(key=lambda d: (d["source_type"], d["model_A"], d["model_B"], d["text"]))
-    return comps
-
-
-def save_row(annotator_id, item, choice):
-    row = {
-        "annotator_id": annotator_id,
-        "source_type": item["source_type"],
-        "text": item["text"],
-        "model_A": item["model_A"],
-        "model_B": item["model_B"],
-        "choice": choice,  # "A" or "B"
-        "instruction_A": item["instruction_A"],
-        "response_A": item["response_A"],
-        "instruction_B": item["instruction_B"],
-        "response_B": item["response_B"],
-        "timestamp": time.time(),
+    return {
+        consent_group: gr.update(visible=False),
+        task_group: gr.update(visible=True),
+        done_group: gr.update(visible=False),
+        state_tasks: tasks,
+        state_task_index: 0,
+        state_annotator_type: annotator_type,
+        progress_counter: gr.update(value=progress_str),
+        instruction_box: gr.update(value=first_task['instruction']),
+        response_a_box: gr.update(value=first_task['response_A']),
+        response_b_box: gr.update(value=first_task['response_B']),
     }
-    pd.DataFrame([row]).to_csv(OUT_FILE, mode="a", header=False, index=False)
+
+def record_choice(tasks, current_index, annotator_type, choice):
+    """
+    Records the user's choice, saves it, and loads the next task.
+    """
+    # 1. Get current task and determine which original response was preferred
+    current_task = tasks[current_index]
+    preferred_response_key = current_task['shuffle_map'][choice] # 'response1' or 'response2'
+
+    # 2. Create a new annotation row, now including the annotator_type
+    new_annotation = {
+        "hash": current_task['hash'],
+        "annotator_type": annotator_type,
+        "choice": choice, # 'A' or 'B'
+        "preferred_response": preferred_response_key,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+    # 3. Load existing annotations, append, and upload
+    annotations_df = download_annotations()
+    new_df = pd.concat([annotations_df, pd.DataFrame([new_annotation])], ignore_index=True)
+    upload_annotations(new_df)
+
+    # 4. Move to the next task
+    next_index = current_index + 1
+    if next_index >= len(tasks):
+        # All tasks for this session are done
+        return {
+            task_group: gr.update(visible=False),
+            done_group: gr.update(visible=True)
+        }
+
+    next_task = tasks[next_index]
+    progress_str = f"Progress: {next_index + 1} / {len(tasks)}"
+
+    return {
+        state_task_index: next_index,
+        progress_counter: gr.update(value=progress_str),
+        instruction_box: gr.update(value=next_task['instruction']),
+        response_a_box: gr.update(value=next_task['response_A']),
+        response_b_box: gr.update(value=next_task['response_B']),
+    }
+
+def update_begin_button_status(consent_given, role_selected):
+    """Enable the begin button only if consent is checked and a role is selected."""
+    return gr.update(interactive=(consent_given and role_selected is not None))
 
 
-QUESTION_MD = (
-    "**Question:** Which Question–Answer pair exhibits a stronger command of Irish grammar and "
-    "semantic coherence? take the use of the reference text into account. If unsure, pick the one "
-    "with a stronger display of Irish grammar. Choose A or B."
-)
+# --- Gradio UI Layout ---
 
+with gr.Blocks(theme=gr.themes.Soft(), title="DPO Annotation") as demo:
+    # State management
+    state_tasks = gr.State([])
+    state_task_index = gr.State(0)
+    state_annotator_type = gr.State("")
 
-with gr.Blocks() as demo:
-    gr.Markdown(
-        "### Irish QA Pair Comparison\nProvide your name once, then choose a source (Wikipedia or Oireachtas). No ties."
-    )
+    # Page 1: Consent
+    with gr.Group(visible=True) as consent_group:
+        gr.Markdown(CONSENT_MD)
+        with gr.Row():
+            consent_checkbox = gr.Checkbox(label="I consent to the terms above")
+            annotator_type_dropdown = gr.Dropdown(["Tester", "Native"], label="Select Your Role")
+        begin_btn = gr.Button("Begin", interactive=False)
 
-    # Persistent state
-    annotator = gr.State("")
-    source_state = gr.State(None)  # "Wiki" | "Oireachtas"
-    comps_state = gr.State([])  # list of dicts
-    idx_state = gr.State(0)
-
-    # Name gate
-    with gr.Row():
-        name_in = gr.Textbox(
-            label="Your Name (required once)", placeholder="e.g., me_01", scale=3
-        )
-        save_name_btn = gr.Button("Save Name", scale=1)
-    name_status = gr.Markdown()
-
-    def save_name(name):
-        name = (name or "").strip()
-        if not name:
-            return "**Please enter your name to proceed.**", ""
-        return f"Name saved: **{name}**", name
-
-    save_name_btn.click(save_name, inputs=[name_in], outputs=[name_status, annotator])
-
-    # Start buttons: source only
-    gr.Markdown("#### Start: Choose Source")
-    with gr.Row():
-        wiki_btn = gr.Button("Wikipedia")
-        oir_btn = gr.Button("Oireachtas")
-
-    crit = gr.Markdown()
-    counter = gr.Markdown()
-    ref_text = gr.Textbox(label="Reference Text", interactive=False, lines=8)
-
-    with gr.Row():
+    # Page 2: Annotation Task
+    with gr.Group(visible=False) as task_group:
+        progress_counter = gr.Markdown("Progress: 0 / 0", elem_id="progress_counter")
         with gr.Column():
-            instA = gr.Textbox(label="Instruction A", interactive=False)
-            respA = gr.Textbox(label="Response A", interactive=False, lines=8)
-        with gr.Column():
-            instB = gr.Textbox(label="Instruction B", interactive=False)
-            respB = gr.Textbox(label="Response B", interactive=False, lines=8)
+            instruction_box = gr.Textbox(label="Instruction", interactive=False, lines=3)
+            with gr.Row():
+                response_a_box = gr.Textbox(label="Answer A", interactive=False, lines=8)
+                response_b_box = gr.Textbox(label="Answer B", interactive=False, lines=8)
+            with gr.Row():
+                choose_a_btn = gr.Button("A is Better", variant="primary")
+                choose_b_btn = gr.Button("B is Better", variant="primary")
 
-    with gr.Row():
-        btnA = gr.Button("A is Better")
-        btnB = gr.Button("B is Better")
-    status = gr.Markdown()
+    # Page 3: Completion Message
+    with gr.Group(visible=False) as done_group:
+        gr.Markdown("## ✅ Thank You!\n\nAll available samples have been annotated. Your contribution is greatly appreciated.")
 
-    def _require_name(name):
-        return "" if (name or "").strip() else "**Enter your name first.**"
 
-    def start(source):
-        comp_list = build_comparisons_k(source, K)
-        if not comp_list:
-            return (
-                "**No items found for selection.**",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                source,
-                [],
-                0,
-            )
-        i = 0
-        item = comp_list[i]
-        return (
-            QUESTION_MD,
-            item["text"],
-            item["instruction_A"],
-            item["response_A"],
-            item["instruction_B"],
-            item["response_B"],
-            f"{i+1} / {len(comp_list)}",
-            source,
-            comp_list,
-            i,
-        )
+    # --- Event Handlers ---
 
-    # Wire start (name gate → start)
-    wiki_btn.click(lambda n: _require_name(n), inputs=[annotator], outputs=[status]).then(
-        lambda: start("Wiki"),
+    # Enable 'Begin' button only when consent is checked AND a role is selected
+    consent_checkbox.change(
+        fn=update_begin_button_status,
+        inputs=[consent_checkbox, annotator_type_dropdown],
+        outputs=begin_btn
+    )
+    annotator_type_dropdown.change(
+        fn=update_begin_button_status,
+        inputs=[consent_checkbox, annotator_type_dropdown],
+        outputs=begin_btn
+    )
+
+    # Start the session when 'Begin' is clicked
+    begin_btn.click(
+        fn=start_session,
+        inputs=[annotator_type_dropdown],
         outputs=[
-            crit,
-            ref_text,
-            instA,
-            respA,
-            instB,
-            respB,
-            counter,
-            source_state,
-            comps_state,
-            idx_state,
-        ],
-        queue=False,
+            consent_group, task_group, done_group,
+            state_tasks, state_task_index, state_annotator_type,
+            progress_counter, instruction_box, response_a_box, response_b_box
+        ]
     )
-    oir_btn.click(lambda n: _require_name(n), inputs=[annotator], outputs=[status]).then(
-        lambda: start("Oireachtas"),
+
+    # Handle choice A
+    choose_a_btn.click(
+        fn=record_choice,
+        inputs=[state_tasks, state_task_index, state_annotator_type, gr.State('A')],
         outputs=[
-            crit,
-            ref_text,
-            instA,
-            respA,
-            instB,
-            respB,
-            counter,
-            source_state,
-            comps_state,
-            idx_state,
-        ],
-        queue=False,
+            state_task_index, progress_counter,
+            instruction_box, response_a_box, response_b_box,
+            task_group, done_group
+        ]
     )
 
-    def choose(choice, name, source, comp_list, i):
-        name = (name or "").strip()
-        if not name:
-            return "**Enter your name first.**", gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), i
-        if not comp_list:
-            return "**No comparisons loaded.**", gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), i
-
-        item = comp_list[i]
-        save_row(name, item, choice)
-
-        i += 1
-        if i >= len(comp_list):  # no wrap-around, stop here
-            return (
-                "**Done — thank you!**",
-                "",
-                "",
-                "",
-                "",
-                "",
-                f"{len(comp_list)} / {len(comp_list)}",
-                i,
-            )
-
-        nxt = comp_list[i]
-        return (
-            f"Saved: {choice}",
-            nxt["text"],
-            nxt["instruction_A"],
-            nxt["response_A"],
-            nxt["instruction_B"],
-            nxt["response_B"],
-            f"{i+1} / {len(comp_list)}",
-            i,
-        )
-
-    btnA.click(
-        lambda name, s, cs, i: choose("A", name, s, cs, i),
-        inputs=[annotator, source_state, comps_state, idx_state],
-        outputs=[status, ref_text, instA, respA, instB, respB, counter, idx_state],
-    )
-    btnB.click(
-        lambda name, s, cs, i: choose("B", name, s, cs, i),
-        inputs=[annotator, source_state, comps_state, idx_state],
-        outputs=[status, ref_text, instA, respA, instB, respB, counter, idx_state],
+    # Handle choice B
+    choose_b_btn.click(
+        fn=record_choice,
+        inputs=[state_tasks, state_task_index, state_annotator_type, gr.State('B')],
+        outputs=[
+            state_task_index, progress_counter,
+            instruction_box, response_a_box, response_b_box,
+            task_group, done_group
+        ]
     )
 
-
-demo.launch(share=True)
+if __name__ == "__main__":
+    # Ensure the source file exists before launching
+    if not Path(TRANSLATED_FILE).exists():
+        print(f"FATAL: Source data file '{TRANSLATED_FILE}' not found.")
+        print("Please ensure the file is in the correct directory before running.")
+    else:
+        demo.launch()
