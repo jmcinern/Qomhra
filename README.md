@@ -1,5 +1,3 @@
-# Joseph McInerney MSc AI Project
-
 ## Part 1: Pretraining
 - Preprocessing: containment, CNG, , UCCIX, Bitext 
 - Training Script
