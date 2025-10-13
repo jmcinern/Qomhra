@@ -18,9 +18,9 @@
     - Training script
     - Dependencies
 - Statistical Analysis of Open-Ended Response Lengths
-- Dataset: [HF_REPO](https://huggingface.co/datasets/jmcinern/Instruction_Ga_En_for_LoRA)
+- Dataset: Request Access
 
 ## Part 2: Human Feedback Data
 - LIMA Translation and Preference Dataset Creation
 - App for Native Annotation
-- Dataset: [HF_REPO](https://huggingface.co/datasets/jmcinern/LIMA_ga/)
+- Dataset: Request Access
