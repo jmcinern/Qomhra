@@ -1,3 +1,8 @@
+# Qomhrá: A Bilingual Irish-English Large Language Model
+# Joseph McInerney, 2025
+
+<img width="631" height="471" alt="Clean_Qomhrá drawio (2)" src="https://github.com/user-attachments/assets/9081fc0e-67b8-4d62-8bcd-50f40f1a6217" />
+
 ## Part 1: Pretraining
 - Preprocessing: containment, CNG, , UCCIX, Bitext 
 - Training Script
