@@ -1,15 +1,13 @@
 # Qomhrá: A Bilingual Irish-English Large Language Model
 # Joseph McInerney, 2025
 
-<img width="833" height="676" alt="image" src="https://github.com/user-attachments/assets/a5d3a5f9-a4b1-4b22-908f-70938f6f403a" />
-
 ## Part 1: Pretraining
-- Preprocessing: containment, CNG, , UCCIX, Bitext 
+- Data Preprocessing: containment, CNG, , UCCIX, Bitext 
 - Training Script
     - Dependencies
-    - Bash Script
-    - Continued Pre-training Script
-    - Distributed Training Config
+    - HPC Bash Script. 
+    - Custom Continued Pre-training Script.      
+    - Distributed Training Config (DeepSpeed).
 
 ## Part 2: Instruction Tuning
 - API Calls to Generate LLM Instruct-Response pairs
@@ -29,3 +27,6 @@
 - LIMA Translation and Preference Dataset Creation
 - App for Native Annotation
 - Dataset: Request Access
+
+- <img width="833" height="676" alt="image" src="https://github.com/user-attachments/assets/a5d3a5f9-a4b1-4b22-908f-70938f6f403a" />
+
